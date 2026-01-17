@@ -1,0 +1,218 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Local Shader Canvas</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0b0b; overflow: hidden; }
+    #ui {
+      position: fixed; left: 12px; top: 12px; width: min(720px, calc(100vw - 24px)); height: 25vw;
+      background: rgba(20,20,20,0.9); border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px; padding: 10px; color: #ddd; font-family: system-ui, sans-serif;
+    }
+    textarea {
+      width: 100%; height: 320px; resize: vertical;
+      background: #111; color: #eee; border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 10px; padding: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px; line-height: 1.35;
+    }
+    #row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+    button {
+      padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.18);
+      background: #1a1a1a; color: #fff; cursor: pointer;
+    }
+    button:hover { background: #242424; }
+    #status { font-size: 12px; }
+    #log {
+      margin-top: 8px; white-space: pre-wrap; font-size: 12px;
+      color: #ffb4b4; max-height: 140px; overflow: auto;
+      border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px;
+    }
+    canvas { width: 100vw; height: 100vh; display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <div id="ui">
+    <div style="font-weight:600; margin-bottom:6px;">Fragment shader (GLSL ES 3.00)</div>
+    <textarea id="fs"></textarea>
+    <div id="row">
+      <button id="compile">Compile</button>
+      <button id="reset">Reset</button>
+      <span id="status"></span>
+    </div>
+    <div id="log"></div>
+  </div>
+
+<script>
+const canvas = document.getElementById("c");
+const gl = canvas.getContext("webgl2");
+if (!gl) throw new Error("WebGL2 not supported");
+
+function resize() {
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const w = Math.floor(innerWidth * dpr);
+  const h = Math.floor(innerHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w; canvas.height = h;
+    gl.viewport(0, 0, w, h);
+  }
+}
+addEventListener("resize", resize);
+
+// Fullscreen quad (2 triangles), clip-space coords
+const quad = new Float32Array([
+  -1,-1,  +1,-1,  -1,+1,
+  -1,+1,  +1,-1,  +1,+1
+]);
+
+const vsSrc = `#version 300 es
+in vec2 a_pos;
+out vec2 v_uv;
+void main() {
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+
+// Your default fragment shader template:
+const defaultFs = `#version 300 es
+precision highp float;
+
+out vec4 outColor;
+
+// Shadertoy uniforms → your local ones
+uniform vec2 u_res;
+uniform float u_time;
+uniform vec2 u_mouse;
+
+// Recreate Shadertoy-style globals
+#define iResolution vec3(u_res, 1.0)
+#define iTime u_time
+#define iMouse vec4(u_mouse, 0.0, 0.0)
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord);
+
+void main() {
+    mainImage(outColor, gl_FragCoord.xy);
+}
+
+// ---- PASTE SHADERTOY CODE BELOW ----
+void mainImage(out vec4 fragColor, in vec2 fragCoord)
+{
+    vec2 uv = fragCoord / iResolution.xy;
+    float c = 0.5 + 0.5 * sin(iTime + uv.x * 10.0);
+    fragColor = vec4(vec3(c), 1.0);
+}
+`;
+
+function compileShader(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(sh);
+    gl.deleteShader(sh);
+    throw new Error(log);
+  }
+  return sh;
+}
+
+function makeProgram(vs, fs) {
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, vs));
+  gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    const log = gl.getProgramInfoLog(prog);
+    gl.deleteProgram(prog);
+    throw new Error(log);
+  }
+  return prog;
+}
+
+// GL objects (VAO + VBO)
+const vao = gl.createVertexArray();
+gl.bindVertexArray(vao);
+
+const vbo = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+
+let program = null;
+let loc = {};
+
+function useProgramFromEditor() {
+  const fs = fsEl.value;
+  const newProg = makeProgram(vsSrc, fs);
+
+  // swap program
+  if (program) gl.deleteProgram(program);
+  program = newProg;
+
+  gl.useProgram(program);
+
+  const aPos = gl.getAttribLocation(program, "a_pos");
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  loc.u_res = gl.getUniformLocation(program, "u_res");
+  loc.u_time = gl.getUniformLocation(program, "u_time");
+  loc.u_mouse = gl.getUniformLocation(program, "u_mouse");
+}
+
+const fsEl = document.getElementById("fs");
+const logEl = document.getElementById("log");
+const statusEl = document.getElementById("status");
+
+document.getElementById("compile").onclick = () => {
+  logEl.textContent = "";
+  try {
+    useProgramFromEditor();
+    statusEl.textContent = "✅ compiled";
+    statusEl.style.color = "#b8ffb8";
+  } catch (e) {
+    statusEl.textContent = "❌ error";
+    statusEl.style.color = "#ffb4b4";
+    logEl.textContent = String(e);
+  }
+};
+document.getElementById("reset").onclick = () => {
+  fsEl.value = defaultFs;
+  document.getElementById("compile").click();
+};
+
+fsEl.value = defaultFs;
+
+// Mouse (bottom-left origin)
+let mouseX = 0, mouseY = 0;
+canvas.addEventListener("mousemove", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  mouseX = (e.clientX - rect.left) * dpr;
+  mouseY = (rect.height - (e.clientY - rect.top)) * dpr;
+});
+
+// Start
+document.getElementById("compile").click();
+
+const start = performance.now();
+function frame(now) {
+  resize();
+  if (!program) return requestAnimationFrame(frame);
+
+  gl.useProgram(program);
+  gl.bindVertexArray(vao);
+
+  gl.uniform2f(loc.u_res, canvas.width, canvas.height);
+  gl.uniform1f(loc.u_time, (now - start) / 1000);
+  gl.uniform2f(loc.u_mouse, mouseX, mouseY);
+
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

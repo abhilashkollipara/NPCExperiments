@@ -1,0 +1,232 @@
+// export function buildScene(){
+//     console.log("Building scene...");
+// }
+
+// export function update(){
+//     console.log("Updating scene...");
+// }
+
+// main.js
+import * as THREE from 'https://csc-vu.github.io/lib/three.module.js';
+
+let sceneRef, cameraRef;
+
+// --- arena / scale ---
+const ARENA_W = 24;
+const ARENA_H = 14;
+const HALF_W = ARENA_W / 2;
+const HALF_H = ARENA_H / 2;
+const WALL_PAD = 0.8;
+
+// --- player state ---
+const player = {
+  obj: null,
+  pos: new THREE.Vector3(0, 0, 0),
+  vel: new THREE.Vector3(0, 0, 0),
+  radius: 0.5,
+};
+
+// --- input ---
+const keys = new Set();
+const mouseNDC = new THREE.Vector2();
+const raycaster = new THREE.Raycaster();
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const aimPoint = new THREE.Vector3();
+
+// --- timing (fixed timestep) ---
+let lastT = performance.now();
+let acc = 0;
+const FIXED_DT = 1 / 120; // 120 Hz sim feels crisp
+const MAX_FRAME = 1 / 15; // avoid spiral-of-death if tab stutters
+
+const vertexShader = `
+  varying vec3 vNormal;
+
+  void main() {
+    vNormal = normal;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const fragmentShader = `
+  precision highp float;
+  varying vec3 vNormal;
+
+  void main() {
+    float light = dot(normalize(vNormal), vec3(0.0, 0.0, 1.0));
+    vec3 gold = vec3(1.0, 0.78, 0.25);
+    gl_FragColor = vec4(gold * light, 1.0);
+  }
+`;
+
+
+export function buildScene(scene, camera /*, tControls */) {
+  sceneRef = scene;
+  cameraRef = camera;
+
+  // Lights
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+  dir.position.set(10, 20, 10);
+  scene.add(dir);
+
+  // Floor
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(ARENA_W, ARENA_H),
+    new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 1 })
+  );
+  floor.rotation.x = -Math.PI / 2;
+  scene.add(floor);
+
+  // Grid helper
+  const grid = new THREE.GridHelper(ARENA_W, ARENA_W, 0x444444, 0x333333);
+  grid.position.y = 0.001;
+  scene.add(grid);
+
+  // Player (simple capsule-ish proxy)
+  const group = new THREE.Group();
+
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(player.radius, player.radius, 1.2, 16),
+    new THREE.MeshStandardMaterial({ color: 0x4aa3ff, roughness: 0.6 })
+  );
+  body.position.y = 0.6;
+  group.add(body);
+
+  const nose = new THREE.Mesh(
+    new THREE.BoxGeometry(0.15, 0.15, 0.6),
+    new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.5 })
+  );
+  nose.position.set(0, 0.8, 0.6);
+  group.add(nose);
+
+  group.position.copy(player.pos);
+  scene.add(group);
+
+  player.obj = group;
+
+  rings();
+
+  // Input listeners
+  window.addEventListener('keydown', (e) => keys.add(e.code));
+  window.addEventListener('keyup', (e) => keys.delete(e.code));
+  window.addEventListener('blur', () => keys.clear());
+
+  window.addEventListener('mousemove', (e) => {
+    mouseNDC.x = (e.clientX / window.innerWidth) * 2 - 1;
+    mouseNDC.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  });
+
+  // Camera framing (2.5D tilt)
+  camera.position.set(0, 18, 18);
+  camera.lookAt(0, 0, 0);
+}
+
+function rings() {
+  const ringGeo = new THREE.TorusGeometry(1, 0.26, 16, 100);
+  const uniforms = {
+  uLightDir: { value: new THREE.Vector3(0.6, 0.9, 0.3).normalize() },
+  uGold:     { value: new THREE.Color(1.0, 0.78, 0.25) }
+};
+
+// 4) Material that uses YOUR shaders
+const ringMat = new THREE.ShaderMaterial({
+  vertexShader,
+  fragmentShader,
+  uniforms
+});
+  // const ringMat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.7 });
+  for (let i =0; i < 5 ; i++){
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    // ring.rotation.x = Math.PI / 2;
+    ring.position.x = (Math.random() - 0.5) * ARENA_W * 0.8;
+    ring.position.z = (Math.random() - 0.5) * ARENA_H * 0.8;
+    ring.position.y = 1.2;
+    // ring.scale.setScalar(1 + i * 0.3);
+    sceneRef.add(ring);
+  }
+}
+
+export function update(camera /*, tControls */) {
+  // Fixed timestep accumulator
+  const now = performance.now();
+  let frameDt = (now - lastT) / 1000;
+  lastT = now;
+  frameDt = Math.min(frameDt, MAX_FRAME);
+  acc += frameDt;
+
+  // Update aim every frame (so facing is smooth)
+  updateAim(camera);
+
+  while (acc >= FIXED_DT) {
+    stepSim(FIXED_DT);
+    acc -= FIXED_DT;
+  }
+
+  // Apply to render object
+  player.obj.position.copy(player.pos);
+
+  // Camera follow (simple and stable)
+  const camTarget = player.pos.clone();
+  camera.position.lerp(new THREE.Vector3(camTarget.x, 18, camTarget.z + 18), 0.12);
+  camera.lookAt(camTarget.x, 0, camTarget.z);
+}
+
+function updateAim(camera) {
+  raycaster.setFromCamera(mouseNDC, camera);
+  raycaster.ray.intersectPlane(groundPlane, aimPoint);
+
+  // Face aim point (ignore y)
+  const dx = aimPoint.x - player.pos.x;
+  const dz = aimPoint.z - player.pos.z;
+  if (dx * dx + dz * dz > 1e-6) {
+    player.obj.rotation.y = Math.atan2(dx, dz);
+  }
+}
+
+function stepSim(dt) {
+  // Movement parameters (tweak freely)
+  const ACCEL = 68;     // how quickly you get up to speed
+  const MAXS = 35;       // max speed
+  const DRAG = 10;      // friction-ish
+
+  // Desired direction from keys
+  let x = 0, z = 0;
+  if (keys.has('KeyW')) z -= 1;
+  if (keys.has('KeyS')) z += 1;
+  if (keys.has('KeyA')) x -= 1;
+  if (keys.has('KeyD')) x += 1;
+
+  const dir = new THREE.Vector3(x, 0, z);
+  if (dir.lengthSq() > 0) dir.normalize();
+
+  // Accelerate
+  player.vel.x += dir.x * ACCEL * dt;
+  player.vel.z += dir.z * ACCEL * dt;
+
+  // Apply drag (exponential-ish, stable across dt)
+  const dragFactor = Math.exp(-DRAG * dt);
+  player.vel.x *= dragFactor;
+  player.vel.z *= dragFactor;
+
+  // Clamp speed
+  const speedSq = player.vel.x * player.vel.x + player.vel.z * player.vel.z;
+  if (speedSq > MAXS * MAXS) {
+    const s = MAXS / Math.sqrt(speedSq);
+    player.vel.x *= s;
+    player.vel.z *= s;
+  }
+
+  // Integrate
+  player.pos.x += player.vel.x * dt;
+  player.pos.z += player.vel.z * dt;
+
+  // Keep inside arena (simple clamp)
+  const minX = -HALF_W + WALL_PAD;
+  const maxX = HALF_W - WALL_PAD;
+  const minZ = -HALF_H + WALL_PAD;
+  const maxZ = HALF_H - WALL_PAD;
+
+  player.pos.x = THREE.MathUtils.clamp(player.pos.x, minX, maxX);
+  player.pos.z = THREE.MathUtils.clamp(player.pos.z, minZ, maxZ);
+}

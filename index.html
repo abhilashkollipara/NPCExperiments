@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Minimal Three.js Template</title>
+  <style>
+    /* Remove page margins and let the canvas fill the window */
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+
+<body>
+    <!-- This is the canvas where all 3D rendering will appear -->
+  <canvas id="glcanvas"></canvas>
+
+  <script type="module">
+    import * as THREE from 'https://csc-vu.github.io/lib/three.module.js';
+    // import { OrbitControls } from 'https://csc-vu.github.io/lib/OrbitControls.js';
+    import { TransformControls } from 'https://csc-vu.github.io/lib/TransformControls.js';
+    import { buildScene, update } from './main.js';
+
+    let scene, camera, renderer, controls, canvas;
+    let tControls;
+
+    // Helper function to create and position a perspective camera
+    function createCamera() {
+      // PerspectiveCamera(fieldOfView, aspectRatio, near, far)
+      let camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 1, 500);
+      camera.position.set(0, 10, 50); 
+      // Look at the center of the scene
+      camera.lookAt(0, 0, 0);
+      return camera; 
+    }
+
+    // Initialize everything: canvas, renderer, scene, camera, controls
+    function init() {
+      canvas = document.getElementById("glcanvas");
+      try {
+        // Create the WebGL renderer, attach it to our canvas, enable antialiasing for smoother edges
+        renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+      } catch (e) {
+        // If the browser/device does not support WebGL, show an error
+        document.body.innerHTML = "<h3><b>WebGL is not available.</b></h3>";
+        return;
+      }
+
+      // Set renderer size and pixel ratio for high-DPI screens
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+
+      // Create an empty scene 
+      scene = new THREE.Scene();
+
+      // Set up the camera
+      camera = createCamera();
+
+      // // Enable interactive orbit controls (click and drag to move camera)
+      // controls = new OrbitControls(camera, renderer.domElement);
+      // controls.enableDamping = true;
+
+      // tControls = new TransformControls(camera, renderer.domElement);
+      // scene.add(tControls); 
+      // tControls.setSpace('local');        // 'local' coordinate system
+      // tControls.setTranslationSnap(0.1);  // snapping (e.g., move in 0.5-unit steps)
+      // tControls.setRotationSnap(THREE.MathUtils.degToRad(15)); // rotate in 15-degree increments
+
+      // // make orbit + transformControls play nicely
+      // tControls.addEventListener('dragging-changed', (e) => {
+      //     controls.enabled = !e.value;
+      // });
+
+
+      // Handle browser resizing
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+       // Call student function to add objects/lights to the scene
+      buildScene(scene, camera, tControls);
+
+       // Start the animation/rendering loop
+      render();
+    }
+
+    // The render loop: updates controls, runs animation code, draws the scene
+    function render() {
+      requestAnimationFrame(render);  // Keep calling render before the next frame
+      // controls.update();              // Update orbit controls (camera movement)
+      update(camera, tControls);                 // Call student animation code (optional)
+      renderer.render(scene, camera); // Draw the current scene from the camera's POV
+    }
+
+    // Run the init function when the page is fully loaded
+    window.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
