@@ -8,6 +8,7 @@
 
 // main.js
 import * as THREE from 'https://csc-vu.github.io/lib/three.module.js';
+import { Bullet } from './weapons.js';
 
 let sceneRef, cameraRef;
 
@@ -38,6 +39,9 @@ let lastT = performance.now();
 let acc = 0;
 const FIXED_DT = 1 / 120; // 120 Hz sim feels crisp
 const MAX_FRAME = 1 / 15; // avoid spiral-of-death if tab stutters
+
+const bullets = [];
+
 
 const vertexShader = `
   varying vec3 vNormal;
@@ -111,11 +115,16 @@ export function buildScene(scene, camera /*, tControls */) {
   window.addEventListener('keydown', (e) => keys.add(e.code));
   window.addEventListener('keyup', (e) => keys.delete(e.code));
   window.addEventListener('blur', () => keys.clear());
+  window.addEventListener('mousedown', onMouseDown);
 
   window.addEventListener('mousemove', (e) => {
     mouseNDC.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouseNDC.y = -(e.clientY / window.innerHeight) * 2 + 1;
   });
+
+  const muzzle = new THREE.Vector3(0, 1, 0);
+  const target = new THREE.Vector3(10, 1, 10);
+  spawnBullet(muzzle, target);
 
   // Camera framing (2.5D tilt)
   camera.position.set(0, 18, 18);
@@ -148,7 +157,6 @@ const ringMat = new THREE.ShaderMaterial({
 }
 
 export function update(camera /*, tControls */) {
-  // Fixed timestep accumulator
   const now = performance.now();
   let frameDt = (now - lastT) / 1000;
   lastT = now;
@@ -158,19 +166,27 @@ export function update(camera /*, tControls */) {
   // Update aim every frame (so facing is smooth)
   updateAim(camera);
 
+  // Fixed-step player sim
   while (acc >= FIXED_DT) {
     stepSim(FIXED_DT);
     acc -= FIXED_DT;
   }
 
+  // Variable-step bullets are fine for now
+  updateBullets(frameDt);
+
   // Apply to render object
   player.obj.position.copy(player.pos);
 
-  // Camera follow (simple and stable)
+  // Camera follow
   const camTarget = player.pos.clone();
-  camera.position.lerp(new THREE.Vector3(camTarget.x, 18, camTarget.z + 18), 0.12);
+  camera.position.lerp(
+    new THREE.Vector3(camTarget.x, 18, camTarget.z + 18),
+    0.12
+  );
   camera.lookAt(camTarget.x, 0, camTarget.z);
 }
+
 
 function updateAim(camera) {
   raycaster.setFromCamera(mouseNDC, camera);
@@ -230,3 +246,50 @@ function stepSim(dt) {
   player.pos.x = THREE.MathUtils.clamp(player.pos.x, minX, maxX);
   player.pos.z = THREE.MathUtils.clamp(player.pos.z, minZ, maxZ);
 }
+
+function spawnBullet( muzzleWorldPos, targetWorldPos) {
+  const dir = new THREE.Vector3()
+    .subVectors(targetWorldPos, muzzleWorldPos)  // target - origin
+    .normalize();
+
+  const bullet = new Bullet(muzzleWorldPos, dir, 40, 80);
+  bullets.push(bullet);
+  sceneRef.add(bullet.mesh);
+}
+
+function updateBullets(delta) {
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
+
+    b.update(delta);
+
+    // TODO: collision here (we’ll do a first pass below)
+
+    if (b.isExpired()) {
+      sceneRef.remove(b.mesh);
+      bullets.splice(i, 1);
+    }
+  }
+}
+
+function onMouseDown(e) {
+  // Left click only
+  if (e.button !== 0) return;
+
+  // Make sure we have cameraRef
+  if (!cameraRef) return;
+
+  // Update aimPoint once right here (in case update() hasn't run yet this frame)
+  raycaster.setFromCamera(mouseNDC, cameraRef);
+  raycaster.ray.intersectPlane(groundPlane, aimPoint);
+
+  // If ray misses the plane for some reason, bail
+  if (!Number.isFinite(aimPoint.x) || !Number.isFinite(aimPoint.z)) return;
+
+  // Use the player as the muzzle for now (temp gun)
+  const muzzle = new THREE.Vector3(player.pos.x, 1.0, player.pos.z);
+
+  const target = aimPoint.clone();
+  spawnBullet(muzzle, target);
+}
+
