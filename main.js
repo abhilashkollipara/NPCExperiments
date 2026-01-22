@@ -64,6 +64,54 @@ const fragmentShader = `
 `;
 
 
+
+const fragmentShader2 = `
+  void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    // Normalized pixel coordinates (from 0 to 1)
+    vec2 uv = fragCoord/iResolution.xy;
+    float h  = uv.y;
+    vec3 colorA = vec3(0.149, 0.141, 0.912);
+    vec3 colorB = vec3(1.000, 0.833, 0.224);
+    vec3 color_horizon = vec3(1.0, 0.55, 0.15);  // orange-yellow
+    vec3 color_lowMid  = vec3(0.9, 0.25, 0.15); // red-orange
+    vec3 color_highMid = vec3(0.5, 0.05, 0.3);   // magenta-ish
+    vec3 color_top     = vec3(0.1, 0.0, 0.2);   // deep violet
+
+    
+    float h_start = 0.0;
+    
+    float h1 = 0.3;
+    
+    float h2 = 0.7;
+    
+    float h_end = 1.0;
+
+    float t = smoothstep(h_start, h_end, h);
+    vec3 skyColor1 = mix(color_horizon, color_lowMid, t);
+    vec3 skyColor2 = mix(color_lowMid, color_highMid, t);
+    vec3 skyColor3 = mix(color_highMid, color_top, t);
+    
+    vec3 col = color_horizon;
+
+    float t0 = smoothstep(h_start, h1, h);
+    col = mix(color_horizon, color_lowMid, t0);
+
+    float t1 = smoothstep(h1, h2, h);
+    col = mix(col, color_highMid, t1);
+
+    float t2 = smoothstep(h2, h_end, h);
+    col = mix(col, color_top, t2);
+
+    // Time varying pixel color
+    //vec3 col = 0.5 + 0.5*cos(iTime+uv.xyx+vec3(0,2,4));
+
+    // Output to screen
+    //fragColor = vec4(col,1.0);
+    float c = 0.5 + 0.5 * sin(iTime + uv.y * 10.0);
+    fragColor = vec4(vec3(col), 1.0);
+}`;
+
 export function buildScene(scene, camera /*, tControls */) {
   sceneRef = scene;
   cameraRef = camera;
@@ -109,6 +157,31 @@ export function buildScene(scene, camera /*, tControls */) {
 
   player.obj = group;
 
+  // Pseudo-code / structure only
+  const skyGeo = new THREE.PlaneGeometry(200, 100); // big
+  const skyMat = new THREE.ShaderMaterial({
+  vertexShader,
+  fragmentShader2,
+  // uniforms
+});
+  const skyMesh = new THREE.Mesh(skyGeo, skyMat);
+
+  // Face the camera. Your camera looks roughly toward negative Z,
+  // so we want the plane's front side to face +Z or -Z depending on your winding.
+  // Easiest: rotate X to stand it up, then rotate Y 180 if needed.
+  skyMesh.rotation.x = -Math.PI / 2.0; // if you want it as vertical wall, tweak as needed
+  // More robust: make it vertical and rotate around Y to face the camera:
+  skyMesh.rotation.set(0, 0, 0);      // vertical plane facing +Z by default
+  skyMesh.position.set(0, 20, -50);   // behind the whole arena, up a bit
+
+  // Important flags:
+  skyMesh.material.depthWrite = false;  // don't write to depth
+  skyMesh.renderOrder = -1;             // render before other stuff if needed
+  skyMesh.frustumCulled = false;       // don't cull when camera moves
+
+  scene.add(skyMesh);
+
+
   rings();
 
   // Input listeners
@@ -127,7 +200,7 @@ export function buildScene(scene, camera /*, tControls */) {
   spawnBullet(muzzle, target);
 
   // Camera framing (2.5D tilt)
-  camera.position.set(0, 18, 18);
+  camera.position.set(0, 10, 18);
   camera.lookAt(0, 0, 0);
 }
 
@@ -179,12 +252,12 @@ export function update(camera /*, tControls */) {
   player.obj.position.copy(player.pos);
 
   // Camera follow
-  const camTarget = player.pos.clone();
-  camera.position.lerp(
-    new THREE.Vector3(camTarget.x, 18, camTarget.z + 18),
-    0.12
-  );
-  camera.lookAt(camTarget.x, 0, camTarget.z);
+  // const camTarget = player.pos.clone();
+  // camera.position.lerp(
+  //   new THREE.Vector3(camTarget.x, 18, camTarget.z + 18),
+  //   0.12
+  // );
+  // camera.lookAt(camTarget.x, 0, camTarget.z);
 }
 
 
